@@ -51,17 +51,8 @@ char password[] = "password";  // your network key
 #define ARDUINO_MAPS_BOT_TOKEN "YourTelegramBotToken" //Telegram
 #define CHAT_ID "1234567" //Telegram chat Id
 
-struct Device{
-  String duration;
-  String durationInTraffic;
-  String differenceMessage;
-};
-
-
 WiFiClientSecure client;
 GoogleMapsApi api(API_KEY, client);
-
-//WiFiClientSecure botClient;
 UniversalTelegramBot bot(ARDUINO_MAPS_BOT_TOKEN, client);
 long telegramDue;
 
@@ -69,18 +60,22 @@ SH1106Wire        display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
 
 //Free Google Maps Api only allows for 2500 "elements" a day, so carful you dont go over
 long mapDueTime;
+const int mapDueDelay = 60000;
+const int mapDueDelayIfFailed = 5000;
 
 
 //Inputs
-
 String origin = "Galway,+Ireland";
 String destination = "Dublin,+Ireland";
-
 String displayText = "Galway -> Dublin";
 
 //Optional
 String departureTime = "now"; //This can also be a timestamp, needs to be in the future for traffic info
 String trafficModel = "best_guess"; //defaults to this anyways. see https://developers.google.com/maps/documentation/distance-matrix/intro#DistanceMatrixRequests for more info
+
+String durationInTraffic;
+int differenceInMinutes;
+int percentageDifference;
 
 void setup() {
 
@@ -123,6 +118,18 @@ void setup() {
   delay(1000);
 }
 
+void displayTraffic() {
+  display.clear();
+  display.drawString(0, 0, displayText);
+  display.drawString(0, 15, "Traf: " + durationInTraffic);
+  if (percentageDifference > 0) {
+    display.drawString(0, 30, percentageDifference + "% (" + String(differenceInMinutes) + " mins) slower");
+  } else {
+    display.drawString(0, 30, percentageDifference + "% (" + String(differenceInMinutes) + " mins) quicker");
+  }
+  display.display();
+}
+
 bool checkGoogleMaps() {
   Serial.println("Getting traffic for " + origin + " to " + destination);
     String responseString = api.distanceMatrix(origin, destination, departureTime, trafficModel);
@@ -134,36 +141,15 @@ bool checkGoogleMaps() {
         String status = element["status"];
         if(status == "OK") {
 
-          String distance = element["distance"]["text"];
-          String duration = element["duration"]["text"];
-          String durationInTraffic = element["duration_in_traffic"]["text"];
+          durationInTraffic = element["duration_in_traffic"]["text"].as<String>();
 
           int durationInSeconds = element["duration"]["value"];
           int durationInTrafficInSeconds = element["duration_in_traffic"]["value"];
-          int differenceInMinutes = (durationInTrafficInSeconds - durationInSeconds)/60;
-          String differenceDescriptor = "slower";
-          if(differenceInMinutes < 0) {
-            differenceDescriptor = "faster";
-            differenceInMinutes = differenceInMinutes * -1;
-          }
-          String diffInMinutesAsString = String(differenceInMinutes);
+          int difference = durationInSeconds - durationInTrafficInSeconds;
+          differenceInMinutes = difference/60;
+          percentageDifference = difference / durationInSeconds * 100;
 
-          display.clear();
-          display.drawString(0, 0, displayText);
-          display.drawString(0, 15, "Norm: " + duration);
-          display.drawString(0, 30, "Traf: " + durationInTraffic);
-          if (differenceInMinutes == 0) {
-            display.drawString(0, 45, "Difference < 1 min");
-          } else if (differenceInMinutes == 0) {
-            display.drawString(0, 45, "~" + diffInMinutesAsString + " min " + differenceDescriptor);
-          } else {
-            display.drawString(0, 45, "~" + diffInMinutesAsString + " mins " + differenceDescriptor);
-          }
-          display.display();
-
-          Serial.println("Distance: " + distance );
-          Serial.println("Duration: " + duration + "(" + durationInSeconds + ")");
-          Serial.println("Duration In Traffic: " + durationInTraffic + "(" + durationInSeconds + ")");
+          Serial.println("Duration In Traffic: " + durationInTraffic + "(" + durationInTrafficInSeconds + ")");
 
           return true;
 
@@ -178,10 +164,6 @@ bool checkGoogleMaps() {
       }
     } else {
       if(responseString == ""){
-        display.clear();
-        display.drawString(0, 0, "No response");
-        display.drawString(0, 15, "Check your internet");
-        display.display();
         Serial.println("No response, probably timed out");
       } else {
         Serial.println("Failed to parse Json. Response:");
@@ -249,9 +231,10 @@ void loop() {
   if (now > mapDueTime)  {
     Serial.println("Checking google maps");
     if (checkGoogleMaps()) {
-      mapDueTime = now + 60000;
+      mapDueTime = now + mapDueDelay;
+      displayTraffic();
     } else {
-      mapDueTime = now + 5000;
+      mapDueTime = now + mapDueDelayIfFailed;
     }
   }
   delay(500);
