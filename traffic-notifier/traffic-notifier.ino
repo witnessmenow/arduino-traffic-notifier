@@ -39,6 +39,8 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 
+#include "FS.h"
+
 // Display Settings
 const int I2C_DISPLAY_ADDRESS = 0x3c;
 const int SDA_PIN = D6;
@@ -63,7 +65,6 @@ long mapDueTime;
 const int mapDueDelay = 60000;
 const int mapDueDelayIfFailed = 5000;
 
-
 //Inputs
 String origin = "Galway,+Ireland";
 String destination = "Dublin,+Ireland";
@@ -75,7 +76,7 @@ String trafficModel = "best_guess"; //defaults to this anyways. see https://deve
 
 String durationInTraffic;
 int differenceInMinutes;
-int percentageDifference;
+float percentageDifference;
 
 void setup() {
 
@@ -114,18 +115,75 @@ void setup() {
   IPAddress ip = WiFi.localIP();
   Serial.println(ip);
 
+  
+  if (!SPIFFS.begin()) {
+    Serial.println("Failed to mount file system");
+    return;
+  }
+
+  loadConfig();
+
   bot.sendMessage(CHAT_ID, "Starting Up", "");
   delay(1000);
+}
+
+bool loadConfig() {
+  File configFile = SPIFFS.open("/config.json", "r");
+  if (!configFile) {
+    Serial.println("Failed to open config file");
+    return false;
+  }
+
+  size_t size = configFile.size();
+  if (size > 1024) {
+    Serial.println("Config file size is too large");
+    return false;
+  }
+
+  // Allocate a buffer to store contents of the file.
+  std::unique_ptr<char[]> buf(new char[size]);
+
+  configFile.readBytes(buf.get(), size);
+
+  StaticJsonBuffer<200> jsonBuffer;
+  JsonObject& json = jsonBuffer.parseObject(buf.get());
+
+  if (!json.success()) {
+    Serial.println("Failed to parse config file");
+    return false;
+  }
+
+  origin = json["origin"].as<String>();
+  destination = json["destination"].as<String>();
+  displayText = json["displayText"].as<String>();
+  return true;
+}
+
+bool saveConfig() {
+  StaticJsonBuffer<200> jsonBuffer;
+  JsonObject& json = jsonBuffer.createObject();
+  json["origin"] = origin;
+  json["destination"] = destination;
+  json["displayText"] = displayText;
+
+  File configFile = SPIFFS.open("/config.json", "w");
+  if (!configFile) {
+    Serial.println("Failed to open config file for writing");
+    return false;
+  }
+
+  json.printTo(configFile);
+  return true;
 }
 
 void displayTraffic() {
   display.clear();
   display.drawString(0, 0, displayText);
   display.drawString(0, 15, "Traf: " + durationInTraffic);
-  if (percentageDifference > 0) {
-    display.drawString(0, 30, percentageDifference + "% (" + String(differenceInMinutes) + " mins) slower");
+  if (percentageDifference < 0.0) {
+    display.drawString(0, 30, String(differenceInMinutes) + " mins (" + String(percentageDifference) + "%) slower");
   } else {
-    display.drawString(0, 30, percentageDifference + "% (" + String(differenceInMinutes) + " mins) quicker");
+    display.drawString(0, 30, String(differenceInMinutes * (-1)) + " mins (" + String(percentageDifference * (-1.0)) + "%) quicker");
   }
   display.display();
 }
@@ -147,10 +205,8 @@ bool checkGoogleMaps() {
           int durationInTrafficInSeconds = element["duration_in_traffic"]["value"];
           int difference = durationInSeconds - durationInTrafficInSeconds;
           differenceInMinutes = difference/60;
-          percentageDifference = difference / durationInSeconds * 100;
-
+          percentageDifference = (difference * 100.0) / durationInSeconds;
           Serial.println("Duration In Traffic: " + durationInTraffic + "(" + durationInTrafficInSeconds + ")");
-
           return true;
 
         }
@@ -202,9 +258,10 @@ void handleNewMessages(int numNewMessages) {
         displayText = text;
         bot.sendMessage(chat_id, "Set text: " + String(text), "");
       }
-      if (text == "/now") {
+      if (text == "/save") {
+        saveConfig();
         mapDueTime = 0;
-        bot.sendMessage(chat_id, "Refeshing times now.", "");
+        bot.sendMessage(chat_id, "Saved config, checking maps api now.", "");
       }
 
       if (text == "/values") {
@@ -219,6 +276,8 @@ void handleNewMessages(int numNewMessages) {
         String welcome = "Welcome from Google Maps Bot\n";
         welcome = welcome + "/destination : set destination\n";
         welcome = welcome + "/origin : set origin\n";
+        welcome = welcome + "/text : sets display text\n";
+        welcome = welcome + "/save : saves new values to config and refreshes screen\n";
         bot.sendMessage(chat_id, welcome, "Markdown");
       }
     }
@@ -240,7 +299,6 @@ void loop() {
   delay(500);
   now = millis();
   if (now > telegramDue)  {
-    Serial.println("Checking Telegram messages");
     int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
 
     while(numNewMessages) {
