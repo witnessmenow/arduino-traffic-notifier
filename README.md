@@ -11,6 +11,7 @@ Get notified of busy traffic using Google Maps API and an ESP8266
 ### Requires
 - Maps API Key - [Instructions on Arduino Google Maps Library Github](https://github.com/witnessmenow/arduino-google-maps-api)
 - Telegram Bot Token - [Instructions on Universal-Arduino-Telegram-Bot Library Github](https://github.com/witnessmenow/Universal-Arduino-Telegram-Bot)
+- Telegram Chat ID - get off @myIdBot in Telegram
 
 ### Hardware
 
