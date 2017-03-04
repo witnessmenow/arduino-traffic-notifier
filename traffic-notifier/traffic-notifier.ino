@@ -46,21 +46,26 @@ const int I2C_DISPLAY_ADDRESS = 0x3c;
 const int SDA_PIN = D6;
 const int SDC_PIN = D7;
 
+const int RGB_RED_PIN = D3;
+const int RGB_GREEN_PIN = D2;
+const int RGB_BLUE_PIN = D1;
+
+
 //------- Replace the following! ------
 char ssid[] = "SSID";       // your network SSID (name)
 char password[] = "password";  // your network key
 #define API_KEY "YourGoogleApiKey"  // your google apps API Token
 #define ARDUINO_MAPS_BOT_TOKEN "YourTelegramBotToken" //Telegram
-#define CHAT_ID "1234567" //Telegram chat Id
+#define CHAT_ID "123456712" //Telegram chat Id
 
 WiFiClientSecure client;
 GoogleMapsApi api(API_KEY, client);
 UniversalTelegramBot bot(ARDUINO_MAPS_BOT_TOKEN, client);
 long telegramDue;
 
-SH1106Wire        display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
+SH1106Wire display(I2C_DISPLAY_ADDRESS, SDA_PIN, SDC_PIN);
 
-//Free Google Maps Api only allows for 2500 "elements" a day, so carful you dont go over
+//Free Google Maps Api only allows for 2500 "elements" a day, so careful you dont go over
 long mapDueTime;
 const int mapDueDelay = 60000;
 const int mapDueDelayIfFailed = 5000;
@@ -69,6 +74,7 @@ const int mapDueDelayIfFailed = 5000;
 String origin = "Galway,+Ireland";
 String destination = "Dublin,+Ireland";
 String displayText = "Galway -> Dublin";
+float limit = 10.0;
 
 //Optional
 String departureTime = "now"; //This can also be a timestamp, needs to be in the future for traffic info
@@ -81,6 +87,12 @@ float percentageDifference;
 void setup() {
 
   Serial.begin(115200);
+
+    // Initialize the LED pins as an outputs
+  pinMode(RGB_RED_PIN, OUTPUT);
+  pinMode(RGB_BLUE_PIN, OUTPUT);
+  pinMode(RGB_GREEN_PIN, OUTPUT);
+
   display.init();
   display.flipScreenVertically();
 
@@ -104,18 +116,18 @@ void setup() {
     Serial.print(".");
     delay(500);
   }
-  
+
   display.clear();
   display.drawString(0, 0, "Connected");
   display.display();
-  
+
   Serial.println("");
   Serial.println("WiFi connected");
   Serial.println("IP address: ");
   IPAddress ip = WiFi.localIP();
   Serial.println(ip);
 
-  
+
   if (!SPIFFS.begin()) {
     Serial.println("Failed to mount file system");
     return;
@@ -156,6 +168,7 @@ bool loadConfig() {
   origin = json["origin"].as<String>();
   destination = json["destination"].as<String>();
   displayText = json["displayText"].as<String>();
+  limit = json["limit"].as<float>();
   return true;
 }
 
@@ -165,6 +178,7 @@ bool saveConfig() {
   json["origin"] = origin;
   json["destination"] = destination;
   json["displayText"] = displayText;
+  json["limit"] = limit;
 
   File configFile = SPIFFS.open("/config.json", "w");
   if (!configFile) {
@@ -176,14 +190,26 @@ bool saveConfig() {
   return true;
 }
 
+void turnLEDRed() {
+  digitalWrite(RGB_RED_PIN, HIGH);
+  digitalWrite(RGB_BLUE_PIN, LOW);
+  digitalWrite(RGB_GREEN_PIN, LOW);
+}
+
+void turnLEDGreen() {
+  digitalWrite(RGB_RED_PIN, LOW);
+  digitalWrite(RGB_BLUE_PIN, LOW);
+  digitalWrite(RGB_GREEN_PIN, HIGH);
+}
+
 void displayTraffic() {
   display.clear();
   display.drawString(0, 0, displayText);
   display.drawString(0, 15, "Traf: " + durationInTraffic);
   if (percentageDifference < 0.0) {
-    display.drawString(0, 30, String(differenceInMinutes) + " mins (" + String(percentageDifference) + "%) slower");
+    display.drawString(0, 30, String(differenceInMinutes * (-1)) + " mins (" + String(percentageDifference * (-1)) + "%) slower");
   } else {
-    display.drawString(0, 30, String(differenceInMinutes * (-1)) + " mins (" + String(percentageDifference * (-1.0)) + "%) quicker");
+    display.drawString(0, 30, String(differenceInMinutes) + " mins (" + String(percentageDifference) + "%) quicker");
   }
   display.display();
 }
@@ -223,13 +249,21 @@ bool checkGoogleMaps() {
         Serial.println("No response, probably timed out");
       } else {
         Serial.println("Failed to parse Json. Response:");
-        Serial.println(responseString); 
+        Serial.println(responseString);
       }
 
       return false;
     }
 
     return false;
+}
+
+void setLed() {
+  if (percentageDifference < limit){
+    turnLEDRed();
+  } else {
+    turnLEDGreen();
+  }
 }
 
 void handleNewMessages(int numNewMessages) {
@@ -258,6 +292,12 @@ void handleNewMessages(int numNewMessages) {
         displayText = text;
         bot.sendMessage(chat_id, "Set text: " + String(text), "");
       }
+      if (text.startsWith("/limit")) {
+        Serial.println(text);
+        text.remove(0, 7);
+        limit = text.toFloat();
+        bot.sendMessage(chat_id, "Set limit: " + String(limit), "");
+      }
       if (text == "/save") {
         saveConfig();
         mapDueTime = 0;
@@ -269,15 +309,17 @@ void handleNewMessages(int numNewMessages) {
         values = values + "/text : " + displayText + "\n";
         values = values + "/origin : " + origin + "\n";
         values = values + "/destination : " + destination + "\n";
+        values = values + "/limit : " + limit + "\n";
         bot.sendMessage(chat_id, values, "Markdown");
       }
-      
+
       if (text == "/start") {
         String welcome = "Welcome from Google Maps Bot\n";
         welcome = welcome + "/destination : set destination\n";
         welcome = welcome + "/origin : set origin\n";
         welcome = welcome + "/text : sets display text\n";
         welcome = welcome + "/save : saves new values to config and refreshes screen\n";
+        welcome = welcome + "/limit : sets the cut off for the colour of the LED\n";
         bot.sendMessage(chat_id, welcome, "Markdown");
       }
     }
@@ -292,6 +334,7 @@ void loop() {
     if (checkGoogleMaps()) {
       mapDueTime = now + mapDueDelay;
       displayTraffic();
+      setLed();
     } else {
       mapDueTime = now + mapDueDelayIfFailed;
     }
@@ -309,5 +352,5 @@ void loop() {
     telegramDue = now + 1000;
   }
   delay(100);
-  
+
 }
