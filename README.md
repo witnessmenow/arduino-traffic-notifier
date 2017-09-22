@@ -1,6 +1,8 @@
 # arduino-traffic-notifier
 Get notified of busy traffic using Google Maps API and an ESP8266
 
+## Makezine readers
+The article in the 59th edition incorrectly links to this report, the report you are looking for is [this one](https://github.com/witnessmenow/Bridge-Traffic-Display). Apologies! 
 
 ### Features
 - Gets estimated travel time from Google Maps API
